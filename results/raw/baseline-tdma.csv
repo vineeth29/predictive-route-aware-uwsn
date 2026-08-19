@@ -1,0 +1,2 @@
+mac,nodes,simStop,packetSize,dataRate,txPackets,rxPackets,phyTx,phyRx,collisions,pdr,throughputKbps,averageDelayMs,averageQueue
+tdma,10,30,50,80000,548,46,46,414,0,8.39416,0.613333,13472.1,25.0365

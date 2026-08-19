@@ -5,10 +5,15 @@ cmake-cache/
 *.a
 *.so
 
-# Simulation outputs
-results/raw/*
-results/processed/*
-results/final/*
+# Large simulation outputs
+results/raw/*.pcap
+results/raw/*.tr
+results/raw/*.asc
+results/raw/*.log
+
+# Temporary processed/final files
+results/processed/*.tmp
+results/final/*.tmp
 
 # Python
 __pycache__/

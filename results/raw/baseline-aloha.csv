@@ -1,0 +1,2 @@
+mac,nodes,simStop,packetSize,dataRate,txPackets,rxPackets,phyTx,phyRx,collisions,pdr,throughputKbps,averageDelayMs,averageQueue
+aloha,10,30,50,80000,548,256,502,2200,1606,46.7153,3.41333,1502.27,4.01642
