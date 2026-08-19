@@ -1,0 +1,26 @@
+# Build files
+build/
+cmake-cache/
+*.o
+*.a
+*.so
+
+# Simulation outputs
+results/raw/*
+results/processed/*
+results/final/*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store
