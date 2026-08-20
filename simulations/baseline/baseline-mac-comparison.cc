@@ -9,6 +9,13 @@
  *
  * The network topology, PHY, channel, traffic model and simulation
  * parameters remain the same. Only the MAC protocol changes.
+ *
+ * This version additionally records REAL Aqua-Sim PHY events
+ * for the 3D visualization:
+ *
+ *   TX         = actual PHY transmission
+ *   RX         = actual PHY reception
+ *   COLLISION  = actual PHY reception collision
  */
 
 #include "ns3/core-module.h"
@@ -43,7 +50,13 @@ static uint64_t g_totalQueueSize = 0;
 static uint64_t g_queueSamples = 0;
 
 // ------------------------------------------------------------
-// Trace callbacks
+// REAL PHY event logging
+// ------------------------------------------------------------
+
+static std::ofstream* g_eventFile = nullptr;
+
+// ------------------------------------------------------------
+// Application TX
 // ------------------------------------------------------------
 
 static void
@@ -52,29 +65,103 @@ TraceApplicationTx(Ptr<const Packet>)
     g_txPackets++;
 }
 
+// ------------------------------------------------------------
+// MAC RX
+// ------------------------------------------------------------
+
 static void
 TraceMacRx(Ptr<const Packet>)
 {
     g_rxPackets++;
 }
 
+// ------------------------------------------------------------
+// REAL PHY TX
+// ------------------------------------------------------------
+
 static void
-TracePhyTx(Ptr<Packet>, double)
+TracePhyTx(
+    uint32_t nodeId,
+    Ptr<Packet> packet,
+    double noise)
 {
     g_phyTxPackets++;
+
+    if (g_eventFile != nullptr)
+    {
+        (*g_eventFile)
+            << std::fixed
+            << std::setprecision(6)
+            << Simulator::Now().GetSeconds()
+            << ",TX,"
+            << nodeId
+            << ","
+            << packet->GetUid()
+            << ","
+            << noise
+            << "\n";
+    }
 }
 
+// ------------------------------------------------------------
+// REAL PHY RX
+// ------------------------------------------------------------
+
 static void
-TracePhyRx(Ptr<Packet>, double)
+TracePhyRx(
+    uint32_t nodeId,
+    Ptr<Packet> packet,
+    double noise)
 {
     g_phyRxPackets++;
+
+    if (g_eventFile != nullptr)
+    {
+        (*g_eventFile)
+            << std::fixed
+            << std::setprecision(6)
+            << Simulator::Now().GetSeconds()
+            << ",RX,"
+            << nodeId
+            << ","
+            << packet->GetUid()
+            << ","
+            << noise
+            << "\n";
+    }
 }
 
+// ------------------------------------------------------------
+// REAL PHY COLLISION
+//
+// Aqua-Sim RxColl has no packet argument.
+// Therefore we record:
+//   time + receiving node
+//
+// We do NOT invent a packet ID.
+// ------------------------------------------------------------
+
 static void
-TraceCollision()
+TraceCollision(uint32_t nodeId)
 {
     g_collisions++;
+
+    if (g_eventFile != nullptr)
+    {
+        (*g_eventFile)
+            << std::fixed
+            << std::setprecision(6)
+            << Simulator::Now().GetSeconds()
+            << ",COLLISION,"
+            << nodeId
+            << ",,"
+            << "\n";
+    }
 }
+
+// ------------------------------------------------------------
+// E2E delay
+// ------------------------------------------------------------
 
 static void
 TraceDelay(uint32_t delayMs)
@@ -82,6 +169,10 @@ TraceDelay(uint32_t delayMs)
     g_totalDelayMs += delayMs;
     g_delaySamples++;
 }
+
+// ------------------------------------------------------------
+// Queue
+// ------------------------------------------------------------
 
 static void
 TraceQueue(uint32_t queueSize)
@@ -97,9 +188,9 @@ TraceQueue(uint32_t queueSize)
 int
 main(int argc, char* argv[])
 {
-    // -----------------------------
+    // --------------------------------------------------------
     // Default experiment parameters
-    // -----------------------------
+    // --------------------------------------------------------
 
     std::string mac = "aloha";
 
@@ -115,9 +206,9 @@ main(int argc, char* argv[])
     uint32_t seed = 12345;
     uint64_t run = 1;
 
-    // -----------------------------
+    // --------------------------------------------------------
     // Command-line parameters
-    // -----------------------------
+    // --------------------------------------------------------
 
     CommandLine cmd;
 
@@ -168,9 +259,9 @@ main(int argc, char* argv[])
 
     cmd.Parse(argc, argv);
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Validate MAC selection
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     if (mac != "aloha" && mac != "tdma")
     {
@@ -178,12 +269,64 @@ main(int argc, char* argv[])
             "Invalid MAC. Use --mac=aloha or --mac=tdma");
     }
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Reproducibility
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     SeedManager::SetSeed(seed);
     SeedManager::SetRun(run);
+
+    // --------------------------------------------------------
+    // Event file
+    // --------------------------------------------------------
+
+    std::string eventFile;
+
+    if (mac == "aloha")
+    {
+        eventFile =
+            "aloha-events.csv";
+    }
+    else
+    {
+        eventFile =
+            "tdma-events.csv";
+    }
+
+    std::ofstream events(eventFile);
+
+    if (!events.is_open())
+    {
+        NS_FATAL_ERROR(
+            "Could not open event file: "
+            << eventFile);
+    }
+
+    // CSV header
+    events
+        << "time,event,node,packet,noise\n";
+
+    g_eventFile = &events;
+
+    // --------------------------------------------------------
+    // Reset statistics
+    // --------------------------------------------------------
+
+    g_txPackets = 0;
+    g_rxPackets = 0;
+    g_phyTxPackets = 0;
+    g_phyRxPackets = 0;
+    g_collisions = 0;
+
+    g_totalDelayMs = 0;
+    g_delaySamples = 0;
+
+    g_totalQueueSize = 0;
+    g_queueSamples = 0;
+
+    // --------------------------------------------------------
+    // Print experiment configuration
+    // --------------------------------------------------------
 
     std::cout << "\n";
     std::cout << "============================================\n";
@@ -198,21 +341,24 @@ main(int argc, char* argv[])
     std::cout << "TX Power           : " << txPower << " W\n";
     std::cout << "Seed               : " << seed << "\n";
     std::cout << "Run                : " << run << "\n";
+    std::cout << "Event File         : " << eventFile << "\n";
     std::cout << "============================================\n\n";
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Create nodes
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     NodeContainer nodesContainer;
+
     nodesContainer.Create(nodes);
 
     PacketSocketHelper socketHelper;
+
     socketHelper.Install(nodesContainer);
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Aqua-Sim channel
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     AquaSimChannelHelper channel =
         AquaSimChannelHelper::Default();
@@ -223,11 +369,12 @@ main(int argc, char* argv[])
     AquaSimHelper aquaHelper =
         AquaSimHelper::Default();
 
-    aquaHelper.SetChannel(channel.Create());
+    aquaHelper.SetChannel(
+        channel.Create());
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Select baseline MAC
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     if (mac == "aloha")
     {
@@ -252,25 +399,25 @@ main(int argc, char* argv[])
             TimeValue(MilliSeconds(1)));
     }
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Routing
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     aquaHelper.SetRouting(
         "ns3::AquaSimRoutingDummy");
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // PHY
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     aquaHelper.SetPhy(
         "ns3::AquaSimPhyCmn",
         "PT",
         DoubleValue(txPower));
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Create underwater devices
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     MobilityHelper mobility;
 
@@ -282,11 +429,15 @@ main(int argc, char* argv[])
     /*
      * Fixed 3D topology.
      *
-     * We intentionally use fixed positions for the baseline so
-     * that ALOHA and TDMA experience the exact same topology.
+     * We intentionally use fixed positions for the baseline
+     * so ALOHA and TDMA experience the exact same topology.
+     *
+     * Nodes are placed at different underwater depths.
      */
 
-    for (uint32_t i = 0; i < nodes; ++i)
+    for (uint32_t i = 0;
+         i < nodes;
+         ++i)
     {
         Ptr<AquaSimNetDevice> device =
             CreateObject<AquaSimNetDevice>();
@@ -296,10 +447,18 @@ main(int argc, char* argv[])
                 nodesContainer.Get(i),
                 device));
 
-        // Deterministic 3D underwater arrangement.
-        double x = 50.0 + (i % 5) * 100.0;
-        double y = 50.0 + (i / 5) * 100.0;
-        double z = -20.0 - (i % 4) * 20.0;
+        // ----------------------------------------------------
+        // Deterministic underwater 3D position
+        // ----------------------------------------------------
+
+        double x =
+            50.0 + (i % 5) * 100.0;
+
+        double y =
+            50.0 + (i / 5) * 100.0;
+
+        double z =
+            -20.0 - (i % 4) * 20.0;
 
         positionAllocator->Add(
             Vector(x, y, z));
@@ -307,7 +466,35 @@ main(int argc, char* argv[])
         device->GetPhy()->SetTransRange(
             transmissionRange);
 
-        // TDMA node gets its own slot.
+        // ----------------------------------------------------
+        // Connect REAL Aqua-Sim PHY traces
+        // ----------------------------------------------------
+
+        Ptr<AquaSimPhy> phy =
+            device->GetPhy();
+
+        phy->TraceConnectWithoutContext(
+            "Tx",
+            MakeBoundCallback(
+                &TracePhyTx,
+                i));
+
+        phy->TraceConnectWithoutContext(
+            "Rx",
+            MakeBoundCallback(
+                &TracePhyRx,
+                i));
+
+        phy->TraceConnectWithoutContext(
+            "RxColl",
+            MakeBoundCallback(
+                &TraceCollision,
+                i));
+
+        // ----------------------------------------------------
+        // TDMA slot assignment
+        // ----------------------------------------------------
+
         if (mac == "tdma")
         {
             device->GetMac()->SetAttribute(
@@ -316,18 +503,26 @@ main(int argc, char* argv[])
         }
     }
 
-    mobility.SetPositionAllocator(positionAllocator);
+    // --------------------------------------------------------
+    // Install mobility
+    // --------------------------------------------------------
+
+    mobility.SetPositionAllocator(
+        positionAllocator);
 
     mobility.SetMobilityModel(
         "ns3::ConstantPositionMobilityModel");
 
-    mobility.Install(nodesContainer);
+    mobility.Install(
+        nodesContainer);
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Application traffic
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
-    for (uint32_t i = 0; i < nodes; ++i)
+    for (uint32_t i = 0;
+         i < nodes;
+         ++i)
     {
         AquaSimApplicationHelper app(
             "ns3::PacketSocketFactory",
@@ -335,21 +530,25 @@ main(int argc, char* argv[])
 
         /*
          * Poisson-like traffic generation using exponential
-         * on/off periods, following the Aqua-Sim NG examples.
+         * on/off periods, following the Aqua-Sim NG setup.
          */
 
         double meanOn =
-            (packetSize * 8.0) / dataRate;
+            (packetSize * 8.0) /
+            dataRate;
 
-        double meanOff = 1.0 / 2.0;
+        double meanOff =
+            1.0 / 2.0;
 
         std::string onTime =
             "ns3::ExponentialRandomVariable[Mean=" +
-            std::to_string(meanOn) + "]";
+            std::to_string(meanOn) +
+            "]";
 
         std::string offTime =
             "ns3::ExponentialRandomVariable[Mean=" +
-            std::to_string(meanOff) + "]";
+            std::to_string(meanOff) +
+            "]";
 
         app.SetAttribute(
             "OnTime",
@@ -369,7 +568,8 @@ main(int argc, char* argv[])
             UintegerValue(packetSize));
 
         ApplicationContainer application =
-            app.Install(nodesContainer.Get(i));
+            app.Install(
+                nodesContainer.Get(i));
 
         application.Start(
             Seconds(0.5));
@@ -378,9 +578,12 @@ main(int argc, char* argv[])
             Seconds(simStop));
     }
 
-    // ------------------------------------------------------------
-    // Connect simulation traces
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
+    // Connect application and MAC traces
+    //
+    // PHY traces are already connected per node above because
+    // we need the node ID for the 3D visualization.
+    // --------------------------------------------------------
 
     Config::ConnectWithoutContext(
         "/NodeList/*/ApplicationList/*/$ns3::Application/Tx",
@@ -398,32 +601,21 @@ main(int argc, char* argv[])
         "/NodeList/*/DeviceList/*/$ns3::NetDevice/Mac/E2EDelayTrace",
         MakeCallback(&TraceDelay));
 
-    Config::ConnectWithoutContext(
-        "/NodeList/*/DeviceList/*/$ns3::NetDevice/Phy/Tx",
-        MakeCallback(&TracePhyTx));
-
-    Config::ConnectWithoutContext(
-        "/NodeList/*/DeviceList/*/$ns3::NetDevice/Phy/Rx",
-        MakeCallback(&TracePhyRx));
-
-    Config::ConnectWithoutContext(
-        "/NodeList/*/DeviceList/*/$ns3::NetDevice/Phy/RxColl",
-        MakeCallback(&TraceCollision));
-
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Run simulation
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
-    std::cout << "----------- Running Simulation -----------\n";
+    std::cout
+        << "----------- Running Simulation -----------\n";
 
     Simulator::Stop(
         Seconds(simStop));
 
     Simulator::Run();
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Calculate metrics
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     double pdr = 0.0;
 
@@ -437,7 +629,8 @@ main(int argc, char* argv[])
 
     double throughputKbps =
         (static_cast<double>(g_rxPackets) *
-         packetSize * 8.0) /
+         packetSize *
+         8.0) /
         simStop /
         1000.0;
 
@@ -459,76 +652,142 @@ main(int argc, char* argv[])
             static_cast<double>(g_queueSamples);
     }
 
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
     // Print results
-    // ------------------------------------------------------------
+    // --------------------------------------------------------
 
     std::cout << "\n";
-    std::cout << "============================================\n";
-    std::cout << "              RESULTS\n";
-    std::cout << "============================================\n";
+    std::cout
+        << "============================================\n";
 
-    std::cout << "MAC Protocol       : " << mac << "\n";
-    std::cout << "Application TX     : " << g_txPackets << "\n";
-    std::cout << "MAC RX             : " << g_rxPackets << "\n";
-    std::cout << "PHY TX             : " << g_phyTxPackets << "\n";
-    std::cout << "PHY RX             : " << g_phyRxPackets << "\n";
-    std::cout << "Collisions         : " << g_collisions << "\n";
+    std::cout
+        << "              RESULTS\n";
 
-    std::cout << std::fixed
-              << std::setprecision(3);
+    std::cout
+        << "============================================\n";
 
-    std::cout << "PDR                : "
-              << pdr << " %\n";
+    std::cout
+        << "MAC Protocol       : "
+        << mac << "\n";
 
-    std::cout << "Throughput         : "
-              << throughputKbps << " kbps\n";
+    std::cout
+        << "Application TX     : "
+        << g_txPackets << "\n";
 
-    std::cout << "Average Delay      : "
-              << averageDelayMs << " ms\n";
+    std::cout
+        << "MAC RX             : "
+        << g_rxPackets << "\n";
 
-    std::cout << "Average Queue      : "
-              << averageQueue << "\n";
+    std::cout
+        << "PHY TX             : "
+        << g_phyTxPackets << "\n";
 
-    std::cout << "============================================\n";
+    std::cout
+        << "PHY RX             : "
+        << g_phyRxPackets << "\n";
 
-    // ------------------------------------------------------------
-    // Save result to CSV
-    // ------------------------------------------------------------
+    std::cout
+        << "Collisions         : "
+        << g_collisions << "\n";
+
+    std::cout
+        << std::fixed
+        << std::setprecision(3);
+
+    std::cout
+        << "PDR                : "
+        << pdr
+        << " %\n";
+
+    std::cout
+        << "Throughput         : "
+        << throughputKbps
+        << " kbps\n";
+
+    std::cout
+        << "Average Delay      : "
+        << averageDelayMs
+        << " ms\n";
+
+    std::cout
+        << "Average Queue      : "
+        << averageQueue
+        << "\n";
+
+    std::cout
+        << "============================================\n";
+
+    // --------------------------------------------------------
+    // Save aggregate result
+    // --------------------------------------------------------
 
     std::string resultFile =
-        "baseline-" + mac + ".csv";
+        "baseline-" +
+        mac +
+        ".csv";
 
-    std::ofstream results(resultFile);
+    std::ofstream results(
+        resultFile);
 
-    results << "mac,nodes,simStop,packetSize,dataRate,"
-            << "txPackets,rxPackets,phyTx,phyRx,"
-            << "collisions,pdr,throughputKbps,"
-            << "averageDelayMs,averageQueue\n";
+    if (!results.is_open())
+    {
+        NS_FATAL_ERROR(
+            "Could not open result file: "
+            << resultFile);
+    }
 
-    results << mac << ","
-            << nodes << ","
-            << simStop << ","
-            << packetSize << ","
-            << dataRate << ","
-            << g_txPackets << ","
-            << g_rxPackets << ","
-            << g_phyTxPackets << ","
-            << g_phyRxPackets << ","
-            << g_collisions << ","
-            << pdr << ","
-            << throughputKbps << ","
-            << averageDelayMs << ","
-            << averageQueue << "\n";
+    results
+        << "mac,nodes,simStop,packetSize,dataRate,"
+        << "txPackets,rxPackets,phyTx,phyRx,"
+        << "collisions,pdr,throughputKbps,"
+        << "averageDelayMs,averageQueue\n";
+
+    results
+        << mac << ","
+        << nodes << ","
+        << simStop << ","
+        << packetSize << ","
+        << dataRate << ","
+        << g_txPackets << ","
+        << g_rxPackets << ","
+        << g_phyTxPackets << ","
+        << g_phyRxPackets << ","
+        << g_collisions << ","
+        << pdr << ","
+        << throughputKbps << ","
+        << averageDelayMs << ","
+        << averageQueue
+        << "\n";
 
     results.close();
 
+    // --------------------------------------------------------
+    // Close real PHY event log
+    // --------------------------------------------------------
+
+    events.flush();
+    events.close();
+
+    g_eventFile = nullptr;
+
+    // --------------------------------------------------------
+    // Destroy simulation
+    // --------------------------------------------------------
+
     Simulator::Destroy();
 
-    std::cout << "\nResults saved to: "
-              << resultFile << "\n";
+    std::cout
+        << "\nResults saved to: "
+        << resultFile
+        << "\n";
 
-    std::cout << "Simulation finished successfully.\n";
+    std::cout
+        << "Events saved to: "
+        << eventFile
+        << "\n";
+
+    std::cout
+        << "Simulation finished successfully.\n";
 
     return 0;
 }
